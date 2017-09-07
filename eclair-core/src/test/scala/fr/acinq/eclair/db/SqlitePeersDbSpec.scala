@@ -12,7 +12,7 @@ import org.scalatest.junit.JUnitRunner
 @RunWith(classOf[JUnitRunner])
 class SqlitePeersDbSpec extends FunSuite {
 
-  def inmem = DriverManager.getConnection("jdbc:sqlite::memory:")
+  def inmem = DriverManager.getConnection("jdbc:h2:mem:")
 
   test("init sqlite 2 times in a row") {
     val sqlite = inmem

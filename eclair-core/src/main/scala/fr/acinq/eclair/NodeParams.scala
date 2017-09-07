@@ -88,7 +88,7 @@ object NodeParams {
       case _ => throw new RuntimeException("only regtest and testnet are supported for now")
     }
 
-    val sqlite = DriverManager.getConnection(s"jdbc:sqlite:${new File(datadir, "eclair.sqlite")}")
+    val sqlite = DriverManager.getConnection(s"jdbc:h2:${new File(datadir, "eclair.sqlite")}")
     val channelsDb = new SqliteChannelsDb(sqlite)
     val peersDb = new SqlitePeersDb(sqlite)
     val networkDb = new SqliteNetworkDb(sqlite)

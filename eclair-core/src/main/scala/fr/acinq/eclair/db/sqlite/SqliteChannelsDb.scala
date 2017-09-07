@@ -13,7 +13,7 @@ class SqliteChannelsDb(sqlite: Connection) extends ChannelsDb {
 
   {
     val statement = sqlite.createStatement
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS local_channels (channel_id BLOB NOT NULL PRIMARY KEY, data BLOB NOT NULL)")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS local_channels (channel_id BINARY NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
   }
 
   override def addOrUpdateChannel(state: HasCommitments): Unit = {

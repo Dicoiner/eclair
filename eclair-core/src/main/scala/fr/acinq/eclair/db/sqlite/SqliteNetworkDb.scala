@@ -16,15 +16,15 @@ class SqliteNetworkDb(sqlite: Connection) extends NetworkDb {
 
   {
     val statement = sqlite.createStatement
-    statement.execute("PRAGMA foreign_keys = ON")
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS nodes (node_id BLOB NOT NULL PRIMARY KEY, data BLOB NOT NULL)")
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channels (short_channel_id INTEGER NOT NULL PRIMARY KEY, data BLOB NOT NULL)")
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channel_updates (short_channel_id INTEGER NOT NULL, node_flag INTEGER NOT NULL, data BLOB NOT NULL, FOREIGN KEY(short_channel_id) REFERENCES channels(short_channel_id))")
+    //statement.execute("PRAGMA foreign_keys = ON")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS nodes (node_id BINARY NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channels (short_channel_id INTEGER NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channel_updates (short_channel_id INTEGER NOT NULL, node_flag INTEGER NOT NULL, data BINARY NOT NULL, FOREIGN KEY(short_channel_id) REFERENCES channels(short_channel_id))")
     statement.executeUpdate("CREATE INDEX IF NOT EXISTS channel_updates_idx ON channel_updates(short_channel_id)")
   }
 
   override def addNode(n: NodeAnnouncement): Unit = {
-    val statement = sqlite.prepareStatement("INSERT OR IGNORE INTO nodes VALUES (?, ?)")
+    val statement = sqlite.prepareStatement("INSERT INTO nodes VALUES (?, ?)")
     statement.setBytes(1, n.nodeId.toBin)
     statement.setBytes(2, nodeAnnouncementCodec.encode(n).require.toByteArray)
     statement.executeUpdate()
@@ -57,10 +57,10 @@ class SqliteNetworkDb(sqlite: Connection) extends NetworkDb {
 
   override def removeChannel(shortChannelId: Long): Unit = {
     val statement = sqlite.createStatement
-    statement.execute("BEGIN TRANSACTION")
+    //statement.execute("BEGIN TRANSACTION")
     statement.executeUpdate(s"DELETE FROM channel_updates WHERE short_channel_id=$shortChannelId")
     statement.executeUpdate(s"DELETE FROM channels WHERE short_channel_id=$shortChannelId")
-    statement.execute("COMMIT TRANSACTION")
+    //statement.execute("COMMIT TRANSACTION")
   }
 
   override def listChannels(): Iterator[ChannelAnnouncement] = {

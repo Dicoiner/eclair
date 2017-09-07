@@ -13,7 +13,7 @@ class SqlitePeersDb(sqlite: Connection) extends PeersDb {
 
   {
     val statement = sqlite.createStatement
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS peers (node_id BLOB NOT NULL PRIMARY KEY, data BLOB NOT NULL)")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS peers (node_id BINARY NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
   }
 
   override def addOrUpdatePeer(nodeId: Crypto.PublicKey, address: InetSocketAddress): Unit = {
