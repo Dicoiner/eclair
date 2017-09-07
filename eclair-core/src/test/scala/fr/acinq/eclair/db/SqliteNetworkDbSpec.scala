@@ -7,6 +7,7 @@ import fr.acinq.bitcoin.{Block, Crypto}
 import fr.acinq.eclair.db.sqlite.SqliteNetworkDb
 import fr.acinq.eclair.randomKey
 import fr.acinq.eclair.router.Announcements
+import org.h2.jdbc.JdbcSQLException
 import org.junit.runner.RunWith
 import org.scalatest.FunSuite
 import org.scalatest.junit.JUnitRunner
@@ -64,7 +65,7 @@ class SqliteNetworkDbSpec extends FunSuite {
 
     assert(db.listChannelUpdates().toSet === Set.empty)
     db.addChannelUpdate(channel_update_1)
-    //intercept[SQLiteException](db.addChannelUpdate(channel_update_2))
+    intercept[JdbcSQLException](db.addChannelUpdate(channel_update_2))
     db.addChannelUpdate(channel_update_3)
     db.removeChannel(channel_3.shortChannelId)
     assert(db.listChannels().toSet === Set(channel_1))
