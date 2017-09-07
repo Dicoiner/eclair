@@ -22,7 +22,7 @@ object TestConstants {
     val seed = BinaryData("01" * 32)
     val master = DeterministicWallet.generate(seed)
     val extendedPrivateKey = DeterministicWallet.derivePrivateKey(master, DeterministicWallet.hardened(46) :: DeterministicWallet.hardened(0) :: Nil)
-    def sqlite = DriverManager.getConnection("jdbc:sqlite::memory:")
+    def sqlite = DriverManager.getConnection("jdbc:h2:mem:")
     def nodeParams = NodeParams(
       extendedPrivateKey = extendedPrivateKey,
       privateKey = extendedPrivateKey.privateKey,
@@ -69,7 +69,7 @@ object TestConstants {
     val seed = BinaryData("02" * 32)
     val master = DeterministicWallet.generate(seed)
     val extendedPrivateKey = DeterministicWallet.derivePrivateKey(master, DeterministicWallet.hardened(46) :: DeterministicWallet.hardened(0) :: Nil)
-    def sqlite = DriverManager.getConnection("jdbc:sqlite::memory:")
+    def sqlite = DriverManager.getConnection("jdbc:h2:mem:")
     def nodeParams = NodeParams(
       extendedPrivateKey = extendedPrivateKey,
       privateKey = extendedPrivateKey.privateKey,

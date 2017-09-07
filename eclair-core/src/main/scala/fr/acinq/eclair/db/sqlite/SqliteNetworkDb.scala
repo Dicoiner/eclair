@@ -18,8 +18,8 @@ class SqliteNetworkDb(sqlite: Connection) extends NetworkDb {
     val statement = sqlite.createStatement
     //statement.execute("PRAGMA foreign_keys = ON")
     statement.executeUpdate("CREATE TABLE IF NOT EXISTS nodes (node_id BINARY NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channels (short_channel_id INTEGER NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
-    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channel_updates (short_channel_id INTEGER NOT NULL, node_flag INTEGER NOT NULL, data BINARY NOT NULL, FOREIGN KEY(short_channel_id) REFERENCES channels(short_channel_id))")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channels (short_channel_id BIGINT NOT NULL PRIMARY KEY, data BINARY NOT NULL)")
+    statement.executeUpdate("CREATE TABLE IF NOT EXISTS channel_updates (short_channel_id BIGINT NOT NULL, node_flag INTEGER NOT NULL, data BINARY NOT NULL, FOREIGN KEY(short_channel_id) REFERENCES channels(short_channel_id))")
     statement.executeUpdate("CREATE INDEX IF NOT EXISTS channel_updates_idx ON channel_updates(short_channel_id)")
   }
 
