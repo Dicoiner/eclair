@@ -124,6 +124,8 @@ class BitcoinjKit(chain: String, datadir: File, staticPeers: List[InetSocketAddr
         updateBlockCount(storedBlock.getHeight)
     })
 
+    wallet().watchMode = true
+
     wallet().addTransactionConfidenceEventListener(new TransactionConfidenceEventListener {
       override def onTransactionConfidenceChanged(wallet: Wallet, bitcoinjTx: BitcoinjTransaction): Unit = {
         Context.propagate(wallet.getContext)
