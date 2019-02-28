@@ -1,10 +1,26 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.crypto
 
 import java.math.BigInteger
 import java.nio.ByteOrder
 
-import fr.acinq.eclair.randomBytes
 import fr.acinq.bitcoin.{BinaryData, Crypto, Protocol}
+import fr.acinq.eclair.randomBytes
 import grizzled.slf4j.Logging
 import org.spongycastle.crypto.digests.SHA256Digest
 import org.spongycastle.crypto.macs.HMac
@@ -168,7 +184,7 @@ object Noise {
     *
     * @param cipher cipher functions
     */
-  case class UnitializedCipherState(cipher: CipherFunctions) extends CipherState {
+  case class UninitializedCipherState(cipher: CipherFunctions) extends CipherState {
     override val hasKey = false
 
     override def encryptWithAd(ad: BinaryData, plaintext: BinaryData): (CipherState, BinaryData) = (this, plaintext)
@@ -197,11 +213,11 @@ object Noise {
 
   object CipherState {
     def apply(k: BinaryData, cipher: CipherFunctions): CipherState = k.length match {
-      case 0 => UnitializedCipherState(cipher)
+      case 0 => UninitializedCipherState(cipher)
       case 32 => InitializedCipherState(k, 0, cipher)
     }
 
-    def apply(cipher: CipherFunctions): CipherState = UnitializedCipherState(cipher)
+    def apply(cipher: CipherFunctions): CipherState = UninitializedCipherState(cipher)
   }
 
   /**

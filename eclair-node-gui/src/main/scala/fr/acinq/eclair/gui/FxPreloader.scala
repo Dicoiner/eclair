@@ -1,3 +1,19 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.gui
 
 import javafx.application.Preloader
@@ -12,7 +28,9 @@ import fr.acinq.eclair.gui.controllers.SplashController
 import grizzled.slf4j.Logging
 
 sealed trait AppNotificationType
+
 case object SuccessAppNotification extends AppNotificationType
+
 case object InfoAppNotification extends AppNotificationType
 
 case class AppNotification(notificationType: AppNotificationType, message: String) extends PreloaderNotification
@@ -57,7 +75,7 @@ class FxPreloader extends Preloader with Logging {
     info match {
       case n: ErrorNotification =>
         logger.debug(s"Preloader error notification => ${n.getDetails}")
-        logger.error(s"An error has occured", n.getCause)
+        logger.error("", n.getCause)
         controller.map(_.addError(n.getDetails))
         controller.map(_.showErrorBox)
       case n: AppNotification =>

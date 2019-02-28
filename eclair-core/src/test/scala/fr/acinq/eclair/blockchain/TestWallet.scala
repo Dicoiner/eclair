@@ -1,9 +1,24 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.blockchain
 
 import fr.acinq.bitcoin.{BinaryData, Crypto, OP_PUSHDATA, OutPoint, Satoshi, Script, Transaction, TxIn, TxOut}
-import fr.acinq.eclair.blockchain.wallet.{EclairWallet, MakeFundingTxResponse}
 
-import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.Future
 import scala.util.Try
 
 /**
@@ -19,6 +34,8 @@ class TestWallet extends EclairWallet {
     Future.successful(TestWallet.makeDummyFundingTx(pubkeyScript, amount, feeRatePerKw))
 
   override def commit(tx: Transaction): Future[Boolean] = Future.successful(true)
+
+  override def rollback(tx: Transaction): Future[Boolean] = Future.successful(true)
 }
 
 object TestWallet {
@@ -28,7 +45,7 @@ object TestWallet {
       txIn = TxIn(OutPoint("42" * 32, 42), signatureScript = Nil, sequence = TxIn.SEQUENCE_FINAL) :: Nil,
       txOut = TxOut(amount, pubkeyScript) :: Nil,
       lockTime = 0)
-    MakeFundingTxResponse(fundingTx, 0)
+    MakeFundingTxResponse(fundingTx, 0, Satoshi(420))
   }
 
   def malleateTx(tx: Transaction): Transaction = {

@@ -1,8 +1,24 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.transactions
 
-import fr.acinq.bitcoin.Crypto.{PrivateKey, PublicKey, ripemd160}
+import fr.acinq.bitcoin.Crypto.{PublicKey, ripemd160}
 import fr.acinq.bitcoin.Script._
-import fr.acinq.bitcoin.{BinaryData, Crypto, LexicographicalOrdering, LockTimeThreshold, OP_0, OP_1, OP_1NEGATE, OP_2, OP_2DROP, OP_ADD, OP_CHECKLOCKTIMEVERIFY, OP_CHECKMULTISIG, OP_CHECKSEQUENCEVERIFY, OP_CHECKSIG, OP_DROP, OP_DUP, OP_ELSE, OP_ENDIF, OP_EQUAL, OP_EQUALVERIFY, OP_HASH160, OP_IF, OP_NOTIF, OP_PUSHDATA, OP_SIZE, OP_SWAP, OutPoint, SIGHASH_ALL, Satoshi, Script, ScriptElt, ScriptWitness, Transaction, TxIn, TxOut}
+import fr.acinq.bitcoin.{BinaryData, LexicographicalOrdering, LockTimeThreshold, OP_0, OP_1, OP_1NEGATE, OP_2, OP_2DROP, OP_ADD, OP_CHECKLOCKTIMEVERIFY, OP_CHECKMULTISIG, OP_CHECKSEQUENCEVERIFY, OP_CHECKSIG, OP_DROP, OP_DUP, OP_ELSE, OP_ENDIF, OP_EQUAL, OP_EQUALVERIFY, OP_HASH160, OP_IF, OP_NOTIF, OP_PUSHDATA, OP_SIZE, OP_SWAP, Satoshi, Script, ScriptElt, ScriptWitness, Transaction, TxIn}
 
 /**
   * Created by PM on 02/12/2016.
@@ -156,13 +172,13 @@ object Scripts {
     else tx.txIn.map(_.sequence).map(sequenceToBlockHeight).max
   }
 
-  def toLocalDelayed(revocationPubkey: PublicKey, toSelfDelay: Int, localDelayedPubkey: PublicKey) = {
+  def toLocalDelayed(revocationPubkey: PublicKey, toSelfDelay: Int, localDelayedPaymentPubkey: PublicKey) = {
     // @formatter:off
     OP_IF ::
       OP_PUSHDATA(revocationPubkey) ::
     OP_ELSE ::
       encodeNumber(toSelfDelay) :: OP_CHECKSEQUENCEVERIFY :: OP_DROP ::
-      OP_PUSHDATA(localDelayedPubkey) ::
+      OP_PUSHDATA(localDelayedPaymentPubkey) ::
     OP_ENDIF ::
     OP_CHECKSIG :: Nil
     // @formatter:on
@@ -181,17 +197,17 @@ object Scripts {
   def witnessToLocalDelayedWithRevocationSig(revocationSig: BinaryData, toLocalScript: BinaryData) =
     ScriptWitness(revocationSig :: BinaryData("01") :: toLocalScript :: Nil)
 
-  def htlcOffered(localPubkey: PublicKey, remotePubkey: PublicKey, revocationPubKey: PublicKey, paymentHash: BinaryData): Seq[ScriptElt] = {
+  def htlcOffered(localHtlcPubkey: PublicKey, remoteHtlcPubkey: PublicKey, revocationPubKey: PublicKey, paymentHash: BinaryData): Seq[ScriptElt] = {
     // @formatter:off
     // To you with revocation key
     OP_DUP :: OP_HASH160 :: OP_PUSHDATA(revocationPubKey.hash160) :: OP_EQUAL ::
     OP_IF ::
         OP_CHECKSIG ::
     OP_ELSE ::
-        OP_PUSHDATA(remotePubkey) :: OP_SWAP  :: OP_SIZE :: encodeNumber(32) :: OP_EQUAL ::
+        OP_PUSHDATA(remoteHtlcPubkey) :: OP_SWAP  :: OP_SIZE :: encodeNumber(32) :: OP_EQUAL ::
         OP_NOTIF ::
             // To me via HTLC-timeout transaction (timelocked).
-            OP_DROP :: OP_2 :: OP_SWAP :: OP_PUSHDATA(localPubkey) :: OP_2 :: OP_CHECKMULTISIG ::
+            OP_DROP :: OP_2 :: OP_SWAP :: OP_PUSHDATA(localHtlcPubkey) :: OP_2 :: OP_CHECKMULTISIG ::
         OP_ELSE ::
             OP_HASH160 :: OP_PUSHDATA(paymentHash) :: OP_EQUALVERIFY ::
             OP_CHECKSIG ::
@@ -213,18 +229,18 @@ object Scripts {
   def witnessClaimHtlcSuccessFromCommitTx(localSig: BinaryData, paymentPreimage: BinaryData, htlcOfferedScript: BinaryData) =
     ScriptWitness(localSig :: paymentPreimage :: htlcOfferedScript :: Nil)
 
-  def htlcReceived(localKey: PublicKey, remotePubkey: PublicKey, revocationPubKey: PublicKey, paymentHash: BinaryData, lockTime: Long) = {
+  def htlcReceived(localHtlcPubkey: PublicKey, remoteHtlcPubkey: PublicKey, revocationPubKey: PublicKey, paymentHash: BinaryData, lockTime: Long) = {
     // @formatter:off
     // To you with revocation key
     OP_DUP :: OP_HASH160 :: OP_PUSHDATA(revocationPubKey.hash160) :: OP_EQUAL ::
     OP_IF ::
         OP_CHECKSIG ::
     OP_ELSE ::
-        OP_PUSHDATA(remotePubkey) :: OP_SWAP :: OP_SIZE :: encodeNumber(32) :: OP_EQUAL ::
+        OP_PUSHDATA(remoteHtlcPubkey) :: OP_SWAP :: OP_SIZE :: encodeNumber(32) :: OP_EQUAL ::
         OP_IF ::
             // To me via HTLC-success transaction.
             OP_HASH160 :: OP_PUSHDATA(paymentHash) :: OP_EQUALVERIFY ::
-            OP_2 :: OP_SWAP :: OP_PUSHDATA(localKey) :: OP_2 :: OP_CHECKMULTISIG ::
+            OP_2 :: OP_SWAP :: OP_PUSHDATA(localHtlcPubkey) :: OP_2 :: OP_CHECKMULTISIG ::
         OP_ELSE ::
             // To you after timeout.
             OP_DROP :: encodeNumber(lockTime) :: OP_CHECKLOCKTIMEVERIFY :: OP_DROP ::
@@ -246,5 +262,12 @@ object Scripts {
     */
   def witnessClaimHtlcTimeoutFromCommitTx(localSig: BinaryData, htlcReceivedScript: BinaryData) =
     ScriptWitness(localSig :: BinaryData.empty :: htlcReceivedScript :: Nil)
+
+  /**
+    * This witness script spends (steals) a [[htlcOffered]] or [[htlcReceived]] output using a revocation key as a punishment
+    * for having published a revoked transaction
+    */
+  def witnessHtlcWithRevocationSig(revocationSig: BinaryData, revocationPubkey: PublicKey, htlcScript: BinaryData) =
+    ScriptWitness(revocationSig :: revocationPubkey.toBin :: htlcScript :: Nil)
 
 }

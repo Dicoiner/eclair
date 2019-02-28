@@ -1,3 +1,19 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.gui.controllers
 
 import javafx.beans.value.{ChangeListener, ObservableValue}
@@ -8,16 +24,12 @@ import javafx.scene.input.KeyCode.{ENTER, TAB}
 import javafx.scene.input.KeyEvent
 import javafx.stage.Stage
 
-import fr.acinq.bitcoin.BinaryData
-import fr.acinq.bitcoin.Crypto.PublicKey
-import fr.acinq.eclair.Setup
-import fr.acinq.eclair.gui.Handlers
-import fr.acinq.eclair.gui.utils.GUIValidators
+import fr.acinq.eclair.CoinUtils
+import fr.acinq.eclair.gui.{FxApp, Handlers}
 import fr.acinq.eclair.payment.PaymentRequest
 import grizzled.slf4j.Logging
 
 import scala.util.{Failure, Success, Try}
-
 
 /**
   * Created by DPA on 23/09/2016.
@@ -27,54 +39,93 @@ class SendPaymentController(val handlers: Handlers, val stage: Stage) extends Lo
   @FXML var paymentRequest: TextArea = _
   @FXML var paymentRequestError: Label = _
   @FXML var nodeIdField: TextField = _
+  @FXML var descriptionLabel: Label = _
+  @FXML var descriptionField: TextArea = _
+  @FXML var amountFieldLabel: Label = _
   @FXML var amountField: TextField = _
-  @FXML var hashField: TextField = _
+  @FXML var amountFieldError: Label = _
+  @FXML var paymentHashField: TextField = _
   @FXML var sendButton: Button = _
 
   @FXML def initialize(): Unit = {
-    // ENTER or TAB events in the paymentRequest textarea insted fire or focus sendButton
+
+    // set the user preferred unit
+    amountFieldLabel.setText(s"Amount (${FxApp.getUnit.shortLabel})")
+
+    // ENTER or TAB events in the paymentRequest textarea instead fire or focus sendButton
     paymentRequest.addEventFilter(KeyEvent.KEY_PRESSED, new EventHandler[KeyEvent] {
       def handle(event: KeyEvent) = {
         event.getCode match {
           case ENTER =>
-            sendButton.fire
-            event.consume
+            sendButton.fire()
+            event.consume()
           case TAB =>
             sendButton.requestFocus()
-            event.consume
+            event.consume()
           case _ =>
         }
       }
     })
     paymentRequest.textProperty.addListener(new ChangeListener[String] {
-      def changed(observable: ObservableValue[_ <: String], oldValue: String, newValue: String) = {
-        Try(PaymentRequest.read(paymentRequest.getText)) match {
-          case Success(pr) =>
-            pr.amount.foreach(amount => amountField.setText(amount.amount.toString))
-            nodeIdField.setText(pr.nodeId.toString)
-            hashField.setText(pr.paymentHash.toString)
+      def changed(observable: ObservableValue[_ <: String], oldValue: String, newValue: String): Unit = {
+        readPaymentRequest() match {
+          case Success(pr) => setUIFields(pr)
           case Failure(f) =>
-            GUIValidators.validate(paymentRequestError, "Please use a valid payment request", false)
-            amountField.setText("0")
-            nodeIdField.setText("N/A")
-            hashField.setText("N/A")
+            paymentRequestError.setText("Could not read this payment request")
+            descriptionLabel.setText("")
+            nodeIdField.setText("")
+            paymentHashField.setText("")
         }
       }
     })
   }
 
-  @FXML def handleSend(event: ActionEvent) = {
-    Try(PaymentRequest.read(paymentRequest.getText)) match {
-      case Success(pr) =>
-        Try(handlers.send(pr.nodeId, pr.paymentHash, pr.amount.get.amount)) match {
-          case Success(s) => stage.close
-          case Failure(f) => GUIValidators.validate(paymentRequestError, s"Invalid Payment Request: ${f.getMessage}", false)
+  /**
+    * Tries to read the payment request string in the payment request input field
+    *
+    * @return a Try containing the payment request object, if successfully parsed
+    */
+  private def readPaymentRequest(): Try[PaymentRequest] = {
+    clearErrors()
+    val prString: String = paymentRequest.getText.trim match {
+      case s if s.startsWith("lightning://") => s.replaceAll("lightning://", "")
+      case s if s.startsWith("lightning:") => s.replaceAll("lightning:", "")
+      case s => s
+    }
+    Try(PaymentRequest.read(prString))
+  }
+
+  private def setUIFields(pr: PaymentRequest) = {
+    pr.amount.foreach(amount => amountField.setText(CoinUtils.rawAmountInUnit(amount, FxApp.getUnit).bigDecimal.toPlainString))
+    pr.description match {
+      case Left(s) => descriptionField.setText(s)
+      case Right(hash) =>
+        descriptionLabel.setText("Description's Hash")
+        descriptionField.setText(hash.toString())
+    }
+    nodeIdField.setText(pr.nodeId.toString)
+    paymentHashField.setText(pr.paymentHash.toString)
+  }
+
+  @FXML def handleSend(event: ActionEvent): Unit = {
+    (Try(CoinUtils.convertStringAmountToMsat(amountField.getText(), FxApp.getUnit.code)), readPaymentRequest()) match {
+      case (Success(amountMsat), Success(pr)) =>
+        // we always override the payment request amount with the one from the UI
+        Try(handlers.send(Some(amountMsat.amount), pr)) match {
+          case Success(_) => stage.close()
+          case Failure(f) => paymentRequestError.setText(s"Invalid Payment Request: ${f.getMessage}")
         }
-      case Failure(f) => GUIValidators.validate(paymentRequestError, "cannot parse payment request", false)
+      case (_, Success(_)) => amountFieldError.setText("Invalid amount")
+      case (_, Failure(_)) => paymentRequestError.setText("Could not read this payment request")
     }
   }
 
-  @FXML def handleClose(event: ActionEvent) = {
-    stage.close
+  @FXML def handleClose(event: ActionEvent): Unit = {
+    stage.close()
+  }
+
+  private def clearErrors(): Unit = {
+    paymentRequestError.setText("")
+    amountFieldError.setText("")
   }
 }

@@ -1,6 +1,23 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.gui
 
 import java.io.File
+
 import javafx.application.Preloader.ErrorNotification
 import javafx.application.{Application, Platform}
 import javafx.event.EventHandler
@@ -8,18 +25,20 @@ import javafx.fxml.FXMLLoader
 import javafx.scene.image.Image
 import javafx.scene.{Parent, Scene}
 import javafx.stage.{Popup, Screen, Stage, WindowEvent}
-
 import akka.actor.{ActorSystem, Props, SupervisorStrategy}
 import fr.acinq.eclair._
-import fr.acinq.eclair.blockchain.zmq.ZMQEvents
+import fr.acinq.eclair.blockchain.bitcoind.zmq.ZMQActor._
+import fr.acinq.eclair.blockchain.electrum.ElectrumClient.ElectrumEvent
 import fr.acinq.eclair.channel.ChannelEvent
 import fr.acinq.eclair.gui.controllers.{MainController, NotificationsController}
 import fr.acinq.eclair.payment.PaymentEvent
+import fr.acinq.eclair.payment.PaymentLifecycle.PaymentResult
 import fr.acinq.eclair.router.NetworkEvent
 import grizzled.slf4j.Logging
 
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.Promise
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 
 /**
@@ -32,20 +51,23 @@ class FxApp extends Application with Logging {
   }
 
   def onError(t: Throwable): Unit = t match {
-    case TCPBindException(port) =>
-      notifyPreloader(new ErrorNotification("Setup", s"Could not bind to port $port", null))
-    case BitcoinRPCConnectionException =>
-      notifyPreloader(new ErrorNotification("Setup", "Could not connect to Bitcoin Core using JSON-RPC.", null))
+    case e@TCPBindException(port) =>
+      notifyPreloader(new ErrorNotification("Setup", s"Could not bind to port $port", e))
+    case e@BitcoinRPCConnectionException =>
+      notifyPreloader(new ErrorNotification("Setup", "Could not connect to Bitcoin Core using JSON-RPC.", e))
       notifyPreloader(new AppNotification(InfoAppNotification, "Make sure that Bitcoin Core is up and running and RPC parameters are correct."))
-    case BitcoinZMQConnectionTimeoutException =>
-      notifyPreloader(new ErrorNotification("Setup", "Could not connect to Bitcoin Core using ZMQ.", null))
+    case e@BitcoinZMQConnectionTimeoutException =>
+      notifyPreloader(new ErrorNotification("Setup", "Could not connect to Bitcoin Core using ZMQ.", e))
       notifyPreloader(new AppNotification(InfoAppNotification, "Make sure that Bitcoin Core is up and running and ZMQ parameters are correct."))
-    case IncompatibleDBException =>
-      notifyPreloader(new ErrorNotification("Setup", "Breaking changes!", null))
+    case e@IncompatibleDBException =>
+      notifyPreloader(new ErrorNotification("Setup", "Breaking changes!", e))
       notifyPreloader(new AppNotification(InfoAppNotification, "Eclair is still in alpha, and under heavy development. Last update was not backward compatible."))
       notifyPreloader(new AppNotification(InfoAppNotification, "Please reset your datadir."))
+    case e@IncompatibleNetworkDBException =>
+      notifyPreloader(new ErrorNotification("Setup", "Unreadable network database!", e))
+      notifyPreloader(new AppNotification(InfoAppNotification, "Could not read the network database. Please remove the file and restart."))
     case t: Throwable =>
-      notifyPreloader(new ErrorNotification("Setup", s"Internal error: ${t.toString}", t))
+      notifyPreloader(new ErrorNotification("Setup", s"Error: ${t.getLocalizedMessage}", t))
   }
 
   override def start(primaryStage: Stage): Unit = {
@@ -61,23 +83,34 @@ class FxApp extends Application with Logging {
           mainFXML.setController(controller)
           val mainRoot = mainFXML.load[Parent]
           val datadir = new File(getParameters.getUnnamed.get(0))
-          implicit val system = ActorSystem("system")
+          implicit val system = ActorSystem("eclair-node-gui")
           val setup = new Setup(datadir)
-          val guiUpdater = setup.system.actorOf(SimpleSupervisor.props(Props(classOf[GUIUpdater], controller), "gui-updater", SupervisorStrategy.Resume))
-          setup.system.eventStream.subscribe(guiUpdater, classOf[ChannelEvent])
-          setup.system.eventStream.subscribe(guiUpdater, classOf[NetworkEvent])
-          setup.system.eventStream.subscribe(guiUpdater, classOf[PaymentEvent])
-          setup.system.eventStream.subscribe(guiUpdater, classOf[ZMQEvents])
+
+          val unitConf = setup.config.getString("gui.unit")
+          FxApp.unit = Try(CoinUtils.getUnitFromString(unitConf)) match {
+            case Failure(_) =>
+              logger.warn(s"$unitConf is not a valid gui unit, must be msat, sat, bits, mbtc or btc. Defaulting to btc.")
+              BtcUnit
+            case Success(u) => u
+          }
+          CoinUtils.setCoinPattern(CoinUtils.getPatternFromUnit(FxApp.unit))
+
+          val guiUpdater = system.actorOf(SimpleSupervisor.props(Props(classOf[GUIUpdater], controller), "gui-updater", SupervisorStrategy.Resume))
+          system.eventStream.subscribe(guiUpdater, classOf[ChannelEvent])
+          system.eventStream.subscribe(guiUpdater, classOf[NetworkEvent])
+          system.eventStream.subscribe(guiUpdater, classOf[PaymentEvent])
+          system.eventStream.subscribe(guiUpdater, classOf[PaymentResult])
+          system.eventStream.subscribe(guiUpdater, classOf[ZMQEvent])
+          system.eventStream.subscribe(guiUpdater, classOf[ElectrumEvent])
           pKit.completeWith(setup.bootstrap)
-          import scala.concurrent.ExecutionContext.Implicits.global
           pKit.future.onComplete {
             case Success(_) =>
               Platform.runLater(new Runnable {
                 override def run(): Unit = {
                   val scene = new Scene(mainRoot)
                   primaryStage.setTitle("Eclair")
-                  primaryStage.setMinWidth(600)
-                  primaryStage.setWidth(960)
+                  primaryStage.setMinWidth(750)
+                  primaryStage.setWidth(980)
                   primaryStage.setMinHeight(400)
                   primaryStage.setHeight(640)
                   primaryStage.setOnCloseRequest(new EventHandler[WindowEvent] {
@@ -122,7 +155,7 @@ class FxApp extends Application with Logging {
         popup.setHideOnEscape(false)
         popup.setAutoFix(false)
         val margin = 10
-        val width = 300
+        val width = 400
         popup.setWidth(margin + width)
         popup.getContent.add(root)
         // positioning the popup @ TOP RIGHT of screen
@@ -132,4 +165,9 @@ class FxApp extends Application with Logging {
       }
     })
   }
+}
+
+object FxApp {
+  private var unit: CoinUnit = BtcUnit
+  def getUnit = FxApp.unit
 }

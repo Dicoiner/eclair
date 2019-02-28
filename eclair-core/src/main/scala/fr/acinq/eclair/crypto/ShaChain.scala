@@ -1,3 +1,19 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.crypto
 
 import fr.acinq.bitcoin._
@@ -97,7 +113,7 @@ object ShaChain {
   }
 
 
-  val shaChainCodec: Codec[ShaChain] =  {
+  val shaChainCodec: Codec[ShaChain] = {
     import scodec.Codec
     import scodec.bits.BitVector
     import scodec.codecs._
@@ -106,7 +122,7 @@ object ShaChain {
     val entryCodec = vectorOfN(uint16, bool) ~ LightningMessageCodecs.varsizebinarydata
 
     // codec for a Map[Vector[Boolean], BinaryData]: write all k ->v pairs using the codec defined above
-    val mapCodec: Codec[Map[Vector[Boolean], BinaryData]] = Codec[Map[Vector[Boolean], BinaryData]] (
+    val mapCodec: Codec[Map[Vector[Boolean], BinaryData]] = Codec[Map[Vector[Boolean], BinaryData]](
       (m: Map[Vector[Boolean], BinaryData]) => vectorOfN(uint16, entryCodec).encode(m.toVector),
       (b: BitVector) => vectorOfN(uint16, entryCodec).decode(b).map(_.map(_.toMap))
     )

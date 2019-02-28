@@ -1,23 +1,39 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.channel
 
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicLong
 
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
+import akka.testkit.TestProbe
 import fr.acinq.bitcoin.{BinaryData, Crypto}
 import fr.acinq.eclair.TestConstants.{Alice, Bob}
 import fr.acinq.eclair._
 import fr.acinq.eclair.blockchain._
+import fr.acinq.eclair.blockchain.bitcoind.ZmqWatcher
 import fr.acinq.eclair.payment.Relayer
 import fr.acinq.eclair.wire.{Init, UpdateAddHtlc}
-import org.junit.runner.RunWith
 import org.scalatest.FunSuite
-import org.scalatest.junit.JUnitRunner
 
 import scala.concurrent.duration._
 import scala.util.Random
 
-@RunWith(classOf[JUnitRunner])
+
 class ThroughputSpec extends FunSuite {
   ignore("throughput") {
     implicit val system = ActorSystem()
@@ -36,7 +52,6 @@ class ThroughputSpec extends FunSuite {
 
       override def receive: Receive = ???
 
-      // TODO: store this map on file ?
       def run(h2r: Map[BinaryData, BinaryData]): Receive = {
         case ('add, tgt: ActorRef) =>
           val r = generateR()
@@ -52,14 +67,16 @@ class ThroughputSpec extends FunSuite {
           context.become(run(h2r - htlc.paymentHash))
       }
     }), "payment-handler")
-    val relayerA = system.actorOf(Relayer.props(Alice.nodeParams.privateKey, paymentHandler))
-    val relayerB = system.actorOf(Relayer.props(Bob.nodeParams.privateKey, paymentHandler))
+    val registerA = TestProbe()
+    val registerB = TestProbe()
+    val relayerA = system.actorOf(Relayer.props(Alice.nodeParams, registerA.ref, paymentHandler))
+    val relayerB = system.actorOf(Relayer.props(Bob.nodeParams, registerB.ref, paymentHandler))
     val wallet = new TestWallet
-    val alice = system.actorOf(Channel.props(Alice.nodeParams, wallet, Bob.id, blockchain, ???, relayerA), "a")
-    val bob = system.actorOf(Channel.props(Bob.nodeParams, wallet, Alice.id, blockchain, ???, relayerB), "b")
+    val alice = system.actorOf(Channel.props(Alice.nodeParams, wallet, Bob.nodeParams.nodeId, blockchain, ???, relayerA, None), "a")
+    val bob = system.actorOf(Channel.props(Bob.nodeParams, wallet, Alice.nodeParams.nodeId, blockchain, ???, relayerB, None), "b")
     val aliceInit = Init(Alice.channelParams.globalFeatures, Alice.channelParams.localFeatures)
     val bobInit = Init(Bob.channelParams.globalFeatures, Bob.channelParams.localFeatures)
-    alice ! INPUT_INIT_FUNDER("00" * 32, TestConstants.fundingSatoshis, TestConstants.pushMsat, TestConstants.feeratePerKw, Alice.channelParams, pipe, bobInit, ChannelFlags.Empty)
+    alice ! INPUT_INIT_FUNDER("00" * 32, TestConstants.fundingSatoshis, TestConstants.pushMsat, TestConstants.feeratePerKw, TestConstants.feeratePerKw, Alice.channelParams, pipe, bobInit, ChannelFlags.Empty)
     bob ! INPUT_INIT_FUNDEE("00" * 32, Bob.channelParams, pipe, aliceInit)
 
     val latch = new CountDownLatch(2)

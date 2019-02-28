@@ -1,11 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ~ Copyright 2018 ACINQ SAS
+  ~
+  ~ Licensed under the Apache License, Version 2.0 (the "License");
+  ~ you may not use this file except in compliance with the License.
+  ~ You may obtain a copy of the License at
+  ~
+  ~     http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~ Unless required by applicable law or agreed to in writing, software
+  ~ distributed under the License is distributed on an "AS IS" BASIS,
+  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~ See the License for the specific language governing permissions and
+  ~ limitations under the License.
+  -->
+
 <configuration scan="true" debug="false">
 
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %msg%ex{12}%n</pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %msg%ex{12}%n</pattern>
         </encoder>
     </appender>
 
@@ -13,17 +29,7 @@
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %yellow(%msg) %ex{12}%n
-            </pattern>
-        </encoder>
-    </appender>
-
-    <appender name="ORANGE" class="ch.qos.logback.core.ConsoleAppender">
-        <target>System.out</target>
-        <withJansi>false</withJansi>
-        <encoder>
-            <pattern>%boldYellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %yellow(%msg) %ex{12}%n
-            </pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %yellow(%msg) %ex{12}%n</pattern>
         </encoder>
     </appender>
 
@@ -31,8 +37,7 @@
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %red(%msg) %ex{12}%n
-            </pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %red(%msg) %ex{12}%n</pattern>
         </encoder>
     </appender>
 
@@ -40,8 +45,7 @@
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} channelId=%X{channelId} - %blue(%msg) %ex{12}%n
-            </pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %blue(%msg) %ex{12}%n</pattern>
         </encoder>
     </appender>
 
@@ -49,8 +53,7 @@
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %cyan(%msg) %ex{12}%n
-            </pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %cyan(%msg) %ex{12}%n</pattern>
         </encoder>
     </appender>
 
@@ -58,8 +61,7 @@
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %green(%msg) %ex{12}%n
-            </pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %green(%msg) %ex{12}%n</pattern>
         </encoder>
     </appender>
 
@@ -67,48 +69,35 @@
         <target>System.out</target>
         <withJansi>false</withJansi>
         <encoder>
-            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{36} %X{akkaSource} - %magenta(%msg) %ex{12}%n
-            </pattern>
+            <pattern>%yellow(${HOSTNAME} %d) %highlight(%-5level) %logger{24} %X{nodeId}%X{channelId} - %magenta(%msg) %ex{12}%n</pattern>
         </encoder>
     </appender>
 
-    <logger name="fr.acinq.eclair.io.Peer" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.io.Peer" level="INFO" additivity="false">
         <appender-ref ref="RED"/>
     </logger>
 
-    <logger name="fr.acinq.eclair.channel" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.channel" level="INFO" additivity="false">
         <appender-ref ref="BLUE"/>
     </logger>
 
-    <logger name="fr.acinq.eclair.payment" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.payment" level="INFO" additivity="false">
         <appender-ref ref="GREEN"/>
     </logger>
 
-    <logger name="fr.acinq.eclair.blockchain.ZmqWatcher" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.blockchain.bitcoind.ZmqWatcher" level="INFO" additivity="false">
         <appender-ref ref="YELLOW"/>
     </logger>
 
-    <logger name="fr.acinq.eclair.blockchain.SpvWatcher" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.blockchain" level="INFO" additivity="false">
         <appender-ref ref="YELLOW"/>
     </logger>
 
-    <logger name="fr.acinq.eclair.blockchain.Broadcaster" level="DEBUG" additivity="false">
-        <appender-ref ref="YELLOW"/>
-    </logger>
-
-    <logger name="fr.acinq.eclair.blockchain.spv" level="DEBUG" additivity="false">
-        <appender-ref ref="YELLOW"/>
-    </logger>
-
-    <logger name="fr.acinq.eclair.blockchain.wallet" level="DEBUG" additivity="false">
-        <appender-ref ref="ORANGE"/>
-    </logger>
-
-    <logger name="fr.acinq.eclair.router" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.router" level="INFO" additivity="false">
         <appender-ref ref="CYAN"/>
     </logger>
 
-    <logger name="fr.acinq.eclair.gui" level="DEBUG" additivity="false">
+    <logger name="fr.acinq.eclair.gui" level="INFO" additivity="false">
         <appender-ref ref="MAGENTA"/>
     </logger>
 

@@ -1,3 +1,19 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.gui.controllers
 
 import javafx.animation._
@@ -9,12 +25,17 @@ import javafx.scene.image.Image
 import javafx.scene.layout.{GridPane, VBox}
 import javafx.util.Duration
 
+import fr.acinq.eclair.gui.utils.ContextMenuUtils
 import grizzled.slf4j.Logging
 
 sealed trait NotificationType
+
 case object NOTIFICATION_NONE extends NotificationType
+
 case object NOTIFICATION_SUCCESS extends NotificationType
+
 case object NOTIFICATION_ERROR extends NotificationType
+
 case object NOTIFICATION_INFO extends NotificationType
 
 /**
@@ -30,11 +51,11 @@ class NotificationsController extends Logging {
   /**
     * Adds a notification panel to the notifications stage
     *
-    * @param title Title of the notification, should not be too long
-    * @param message Main message of the notification
+    * @param title            Title of the notification, should not be too long
+    * @param message          Main message of the notification
     * @param notificationType type of the notification (error, warning, success, info...)
     */
-  def addNotification (title: String, message: String, notificationType: NotificationType) = {
+  def addNotification(title: String, message: String, notificationType: NotificationType) = {
 
     val loader = new FXMLLoader(getClass.getResource("/gui/main/notificationPane.fxml"))
     val notifPaneController = new NotificationPaneController
@@ -48,38 +69,52 @@ class NotificationsController extends Logging {
         // set notification content
         notifPaneController.titleLabel.setText(title)
         notifPaneController.messageLabel.setText(message.capitalize)
-        notificationType match {
+        val autoDismissed = notificationType match {
           case NOTIFICATION_SUCCESS => {
             notifPaneController.rootPane.setStyle("-fx-border-color: #28d087")
             notifPaneController.icon.setImage(successIcon)
+            true
           }
           case NOTIFICATION_ERROR => {
             notifPaneController.rootPane.setStyle("-fx-border-color: #d43c4e")
             notifPaneController.icon.setImage(errorIcon)
+            false
           }
           case NOTIFICATION_INFO => {
             notifPaneController.rootPane.setStyle("-fx-border-color: #409be6")
             notifPaneController.icon.setImage(infoIcon)
+            true
           }
-          case _ =>
+          case _ => true
         }
 
         // in/out animations
         val showAnimation = getShowAnimation(notifPaneController.rootPane)
+
         val dismissAnimation = getDismissAnimation(notifPaneController.rootPane)
         dismissAnimation.setOnFinished(new EventHandler[ActionEvent] {
           override def handle(event: ActionEvent) = notifsVBox.getChildren.remove(root)
         })
-        notifPaneController.closeButton.setOnAction(new EventHandler[ActionEvent] {
+        notifPaneController.copyButton.setOnAction(new EventHandler[ActionEvent] {
           override def handle(event: ActionEvent) = {
-            dismissAnimation.stop
-            dismissAnimation.setDelay(Duration.ZERO)
-            dismissAnimation.play
+            dismissAnimation.stop() // automatic dismiss is cancelled
+            ContextMenuUtils.copyToClipboard(message)
+            notifPaneController.copyButton.setOnAction(null)
+            notifPaneController.copyButton.setText("Copied!")
           }
         })
-        showAnimation.play
-        dismissAnimation.setDelay(Duration.seconds(12))
-        dismissAnimation.play
+        notifPaneController.closeButton.setOnAction(new EventHandler[ActionEvent] {
+          override def handle(event: ActionEvent) = {
+            dismissAnimation.stop()
+            dismissAnimation.setDelay(Duration.ZERO)
+            dismissAnimation.play()
+          }
+        })
+        showAnimation.play()
+        if (autoDismissed) {
+          dismissAnimation.setDelay(Duration.seconds(12))
+          dismissAnimation.play()
+        }
       }
     })
   }

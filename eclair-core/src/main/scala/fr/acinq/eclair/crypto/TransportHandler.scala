@@ -1,18 +1,41 @@
+/*
+ * Copyright 2018 ACINQ SAS
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package fr.acinq.eclair.crypto
 
 import java.nio.ByteOrder
 
-import akka.actor.{Actor, ActorRef, FSM, Terminated}
-import akka.io.Tcp.{PeerClosed, _}
+import akka.actor.{Actor, ActorRef, ExtendedActorSystem, FSM, PoisonPill, Props, Terminated}
+import akka.event.Logging.MDC
+import akka.event._
+import akka.io.Tcp
 import akka.util.ByteString
 import fr.acinq.bitcoin.Crypto.PublicKey
 import fr.acinq.bitcoin.{BinaryData, Protocol}
+import fr.acinq.eclair.{Diagnostics, FSMDiagnosticActorLogging, Logs}
 import fr.acinq.eclair.crypto.Noise._
+import fr.acinq.eclair.wire._
+import fr.acinq.eclair.wire.{ChannelAnnouncement, ChannelUpdate, NodeAnnouncement}
 import scodec.bits.BitVector
 import scodec.{Attempt, Codec, DecodeResult}
 
 import scala.annotation.tailrec
+import scala.collection.immutable.Queue
 import scala.reflect.ClassTag
+import scala.util.{Failure, Success, Try}
 
 /**
   * see BOLT #8
@@ -27,11 +50,38 @@ import scala.reflect.ClassTag
   * @param rs         remote node static public key (which must be known before we initiate communication)
   * @param connection actor that represents the other node's
   */
-class TransportHandler[T: ClassTag](keyPair: KeyPair, rs: Option[BinaryData], connection: ActorRef, codec: Codec[T]) extends Actor with FSM[TransportHandler.State, TransportHandler.Data] {
+class TransportHandler[T: ClassTag](keyPair: KeyPair, rs: Option[BinaryData], connection: ActorRef, codec: Codec[T]) extends Actor with FSMDiagnosticActorLogging[TransportHandler.State, TransportHandler.Data] {
+
+  // will hold the peer's public key once it is available (we don't know it right away in case of an incoming connection)
+  var remoteNodeId_opt: Option[PublicKey] = rs.map(PublicKey(_))
+
+  val wireLog = new BusLogging(context.system.eventStream, "", classOf[Diagnostics], context.system.asInstanceOf[ExtendedActorSystem].logFilter) with DiagnosticLoggingAdapter
+
+  def diag(message: T, direction: String) = {
+    require(direction == "IN" || direction == "OUT")
+    val channelId_opt = message match {
+      case msg: HasTemporaryChannelId => Some(msg.temporaryChannelId)
+      case msg: HasChannelId => Some(msg.channelId)
+      case _ => None
+    }
+
+    wireLog.mdc(Logs.mdc(remoteNodeId_opt, channelId_opt))
+    if (channelId_opt.isDefined) {
+      // channel-related messages are logged as info
+      wireLog.info(s"$direction msg={}", message)
+    } else {
+      // other messages (e.g. routing gossip) are logged as debug
+      wireLog.debug(s"$direction msg={}", message)
+    }
+    wireLog.clearMDC()
+  }
 
   import TransportHandler._
 
-  connection ! akka.io.Tcp.Register(self)
+  connection ! Tcp.Register(self)
+  connection ! Tcp.ResumeReading
+
+  def buf(message: BinaryData): ByteString = ByteString.fromArray(message)
 
   // it means we initiate the dialog
   val isWriter = rs.isDefined
@@ -42,38 +92,46 @@ class TransportHandler[T: ClassTag](keyPair: KeyPair, rs: Option[BinaryData], co
     val state = makeWriter(keyPair, rs.get)
     val (state1, message, None) = state.write(BinaryData.empty)
     log.debug(s"sending prefix + $message")
-    connection ! Write(TransportHandler.prefix +: message)
+    connection ! Tcp.Write(buf(TransportHandler.prefix +: message))
     state1
   } else {
     makeReader(keyPair)
   }
 
-  def sendToListener(listener: ActorRef, plaintextMessages: Seq[BinaryData]) = {
-    plaintextMessages.map(plaintext => {
-      codec.decode(BitVector(plaintext.data)) match {
-        case Attempt.Successful(DecodeResult(message, _)) => listener ! message
-        case Attempt.Failure(err) => log.error(s"cannot deserialize $plaintext: $err")
-      }
+  def sendToListener(listener: ActorRef, plaintextMessages: Seq[BinaryData]): Map[T, Int] = {
+    var m: Map[T, Int] = Map()
+    plaintextMessages.foreach(plaintext => Try(codec.decode(BitVector(plaintext.data))) match {
+      case Success(Attempt.Successful(DecodeResult(message, _))) =>
+        diag(message, "IN")
+        listener ! message
+        m += (message -> (m.getOrElse(message, 0) + 1))
+      case Success(Attempt.Failure(err)) =>
+        log.error(s"cannot deserialize $plaintext: $err")
+      case Failure(t) =>
+        log.error(s"cannot deserialize $plaintext: ${t.getMessage}")
     })
+    m
   }
 
   startWith(Handshake, HandshakeData(reader))
 
   when(Handshake) {
-    case Event(Received(data), HandshakeData(reader, buffer)) =>
-      log.debug(s"received ${BinaryData(data)}")
+    case Event(Tcp.Received(data), HandshakeData(reader, buffer)) =>
+      connection ! Tcp.ResumeReading
+      log.debug("received {}", BinaryData(data))
       val buffer1 = buffer ++ data
       if (buffer1.length < expectedLength(reader))
         stay using HandshakeData(reader, buffer1)
       else {
-        require(buffer1.head == TransportHandler.prefix, s"invalid transport prefix ${buffer1.head}")
+        require(buffer1.head == TransportHandler.prefix, s"invalid transport prefix first64=${BinaryData(buffer1.take(64))}")
         val (payload, remainder) = buffer1.tail.splitAt(expectedLength(reader) - 1)
 
         reader.read(payload) match {
           case (writer, _, Some((dec, enc, ck))) =>
             val remoteNodeId = PublicKey(writer.rs)
-            context.parent ! HandshakeCompleted(self, remoteNodeId)
-            val nextStateData = WaitingForListenerData(ExtendedCipherState(enc, ck), ExtendedCipherState(dec, ck), remainder)
+            remoteNodeId_opt = Some(remoteNodeId)
+            context.parent ! HandshakeCompleted(connection, self, remoteNodeId)
+            val nextStateData = WaitingForListenerData(Encryptor(ExtendedCipherState(enc, ck)), Decryptor(ExtendedCipherState(dec, ck), ciphertextLength = None, remainder))
             goto(WaitingForListener) using nextStateData
 
           case (writer, _, None) => {
@@ -82,14 +140,15 @@ class TransportHandler[T: ClassTag](keyPair: KeyPair, rs: Option[BinaryData], co
                 // we're still in the middle of the handshake process and the other end must first received our next
                 // message before they can reply
                 require(remainder.isEmpty, "unexpected additional data received during handshake")
-                connection ! Write(TransportHandler.prefix +: message)
+                connection ! Tcp.Write(buf(TransportHandler.prefix +: message))
                 stay using HandshakeData(reader1, remainder)
               }
               case (_, message, Some((enc, dec, ck))) => {
-                connection ! Write(TransportHandler.prefix +: message)
+                connection ! Tcp.Write(buf(TransportHandler.prefix +: message))
                 val remoteNodeId = PublicKey(writer.rs)
-                context.parent ! HandshakeCompleted(self, remoteNodeId)
-                val nextStateData = WaitingForListenerData(ExtendedCipherState(enc, ck), ExtendedCipherState(dec, ck), remainder)
+                remoteNodeId_opt = Some(remoteNodeId)
+                context.parent ! HandshakeCompleted(connection, self, remoteNodeId)
+                val nextStateData = WaitingForListenerData(Encryptor(ExtendedCipherState(enc, ck)), Decryptor(ExtendedCipherState(dec, ck), ciphertextLength = None, remainder))
                 goto(WaitingForListener) using nextStateData
               }
             }
@@ -99,57 +158,128 @@ class TransportHandler[T: ClassTag](keyPair: KeyPair, rs: Option[BinaryData], co
   }
 
   when(WaitingForListener) {
+    case Event(Tcp.Received(data), d@WaitingForListenerData(_, dec)) =>
+      stay using d.copy(decryptor = dec.copy(buffer = dec.buffer ++ data))
 
-    case Event(Received(data), currentStateData@WaitingForListenerData(enc, dec, buffer)) =>
-      stay using currentStateData.copy(buffer = buffer ++ data)
-
-    case Event(Listener(listener), WaitingForListenerData(enc, dec, buffer)) =>
-      val (nextStateData, plaintextMessages) = WaitingForCyphertextData(enc, dec, None, buffer, listener).decrypt
+    case Event(Listener(listener), d@WaitingForListenerData(_, dec)) =>
       context.watch(listener)
-      sendToListener(listener, plaintextMessages)
-      goto(WaitingForCyphertext) using nextStateData
-
+      val (dec1, plaintextMessages) = dec.decrypt()
+      if (plaintextMessages.isEmpty) {
+        connection ! Tcp.ResumeReading
+        goto(Normal) using NormalData(d.encryptor, dec1, listener, sendBuffer = SendBuffer(Queue.empty, Queue.empty), unackedReceived = Map.empty[T, Int], unackedSent = None)
+      } else {
+        log.debug(s"read ${plaintextMessages.size} messages, waiting for readacks")
+        val unackedReceived = sendToListener(listener, plaintextMessages)
+        goto(Normal) using NormalData(d.encryptor, dec1, listener, sendBuffer = SendBuffer(Queue.empty, Queue.empty), unackedReceived, unackedSent = None)
+      }
   }
 
-  when(WaitingForCyphertext) {
-    case Event(Received(data), currentStateData@WaitingForCyphertextData(enc, dec, length, buffer, listener)) =>
-      val (nextStateData, plaintextMessages) = WaitingForCyphertextData.decrypt(currentStateData.copy(buffer = buffer ++ data))
-      sendToListener(listener, plaintextMessages)
-      stay using nextStateData
+  when(Normal) {
+    case Event(Tcp.Received(data), d: NormalData[T]) =>
+      val (dec1, plaintextMessages) = d.decryptor.copy(buffer = d.decryptor.buffer ++ data).decrypt()
+      if (plaintextMessages.isEmpty) {
+        connection ! Tcp.ResumeReading
+        stay using d.copy(decryptor = dec1)
+      } else {
+        log.debug(s"read {} messages, waiting for readacks", plaintextMessages.size)
+        val unackedReceived = sendToListener(d.listener, plaintextMessages)
+        stay using NormalData(d.encryptor, dec1, d.listener, d.sendBuffer, unackedReceived, d.unackedSent)
+      }
 
-    case Event(t: T, WaitingForCyphertextData(enc, dec, length, buffer, listener)) =>
-      val blob = codec.encode(t).require.toByteArray
-      val (enc1, ciphertext) = TransportHandler.encrypt(enc, blob)
-      connection ! Write(ByteString.fromArray(ciphertext.toArray))
-      stay using WaitingForCyphertextData(enc1, dec, length, buffer, listener)
+    case Event(ReadAck(msg: T), d: NormalData[T]) =>
+      // how many occurences of this message are still unacked?
+      val remaining = d.unackedReceived.getOrElse(msg, 0) - 1
+      // if all occurences have been acked then we remove the entry from the map
+      val unackedReceived1 = if (remaining > 0) d.unackedReceived + (msg -> remaining) else d.unackedReceived - msg
+      if (unackedReceived1.isEmpty) {
+        log.debug("last incoming message was acked, resuming reading")
+        connection ! Tcp.ResumeReading
+        stay using d.copy(unackedReceived = unackedReceived1)
+      } else {
+        stay using d.copy(unackedReceived = unackedReceived1)
+      }
+
+    case Event(t: T, d: NormalData[T]) =>
+      if (d.sendBuffer.normalPriority.size + d.sendBuffer.lowPriority.size >= MAX_BUFFERED) {
+        log.warning(s"send buffer overrun, closing connection")
+        connection ! PoisonPill
+        stop(FSM.Normal)
+      } else if (d.unackedSent.isDefined) {
+        log.debug("buffering send data={}", t)
+        val sendBuffer1 = t match {
+          case _: ChannelAnnouncement => d.sendBuffer.copy(lowPriority = d.sendBuffer.lowPriority :+ t)
+          case _: NodeAnnouncement => d.sendBuffer.copy(lowPriority = d.sendBuffer.lowPriority :+ t)
+          case _: ChannelUpdate => d.sendBuffer.copy(lowPriority = d.sendBuffer.lowPriority :+ t)
+          case _ => d.sendBuffer.copy(normalPriority = d.sendBuffer.normalPriority :+ t)
+        }
+        stay using d.copy(sendBuffer = sendBuffer1)
+      } else {
+        diag(t, "OUT")
+        val blob = codec.encode(t).require.toByteArray
+        val (enc1, ciphertext) = d.encryptor.encrypt(blob)
+        connection ! Tcp.Write(buf(ciphertext), WriteAck)
+        stay using d.copy(encryptor = enc1, unackedSent = Some(t))
+      }
+
+    case Event(WriteAck, d: NormalData[T]) =>
+      def send(t: T) = {
+        diag(t, "OUT")
+        val blob = codec.encode(t).require.toByteArray
+        val (enc1, ciphertext) = d.encryptor.encrypt(blob)
+        connection ! Tcp.Write(buf(ciphertext), WriteAck)
+        enc1
+      }
+
+      d.sendBuffer.normalPriority.dequeueOption match {
+        case Some((t, normalPriority1)) =>
+          val enc1 = send(t)
+          stay using d.copy(encryptor = enc1, sendBuffer = d.sendBuffer.copy(normalPriority = normalPriority1), unackedSent = Some(t))
+        case None =>
+          d.sendBuffer.lowPriority.dequeueOption match {
+            case Some((t, lowPriority1)) =>
+              val enc1 = send(t)
+              stay using d.copy(encryptor = enc1, sendBuffer = d.sendBuffer.copy(lowPriority = lowPriority1), unackedSent = Some(t))
+            case None =>
+              stay using d.copy(unackedSent = None)
+          }
+      }
   }
 
   whenUnhandled {
-    case Event(ErrorClosed(cause), _) =>
-      // we transform connection closed events into application error so that it triggers a uniclose
-      log.warning(s"tcp connection error: $cause")
-      stop(FSM.Normal)
-
-    case Event(PeerClosed, _) =>
-      log.warning(s"connection closed")
+    case Event(closed: Tcp.ConnectionClosed, _) =>
+      log.info(s"connection closed: $closed")
       stop(FSM.Normal)
 
     case Event(Terminated(actor), _) if actor == connection =>
-      log.warning(s"connection terminated, stopping the transport")
+      log.info(s"connection terminated, stopping the transport")
       // this can be the connection or the listener, either way it is a cause of death
       stop(FSM.Normal)
+
+    case Event(msg, d) =>
+      d match {
+        case n: NormalData[T] => log.warning(s"unhandled message $msg in state normal unackedSent=${n.unackedSent.size} unackedReceived=${n.unackedReceived.size} sendBuffer.lowPriority=${n.sendBuffer.lowPriority.size} sendBuffer.normalPriority=${n.sendBuffer.normalPriority.size}")
+        case _ => log.warning(s"unhandled message $msg in state ${d.getClass.getSimpleName}")
+      }
+      stay
   }
 
-  override def aroundPostStop(): Unit = connection ! Close
+  override def aroundPostStop(): Unit = connection ! Tcp.Close // attempts to gracefully close the connection when dying
 
   initialize()
+
+  override def mdc(currentMessage: Any): MDC = Logs.mdc(remoteNodeId_opt = remoteNodeId_opt)
 
 }
 
 object TransportHandler {
+
+  def props[T: ClassTag](keyPair: KeyPair, rs: Option[BinaryData], connection: ActorRef, codec: Codec[T]): Props = Props(new TransportHandler(keyPair, rs, connection, codec))
+
+  val MAX_BUFFERED = 100000L
+
   // see BOLT #8
-  // this prefix is prepended to all Noise messages sent during the hanshake phase
-  val prefix: Byte = 0
+  // this prefix is prepended to all Noise messages sent during the handshake phase
+  val prefix: Byte = 0x00
 
   val prologue = "lightning".getBytes("UTF-8")
 
@@ -164,34 +294,6 @@ object TransportHandler {
     case 1 => 66
   }
 
-  /**
-    * see BOLT #8
-    * +-------------------------------
-    * |2-byte encrypted message length|
-    * +-------------------------------
-    * |  16-byte MAC of the encrypted |
-    * |        message length         |
-    * +-------------------------------
-    * |                               |
-    * |                               |
-    * |     encrypted lightning       |
-    * |            message            |
-    * |                               |
-    * +-------------------------------
-    * |     16-byte MAC of the        |
-    * |      lightning message        |
-    * +-------------------------------
-    *
-    * @param enc       cipherstate
-    * @param plaintext plaintext
-    * @return a (cipherstate, ciphertext) tuple where ciphertext is encrypted according to BOLT #8
-    */
-  def encrypt(enc: CipherState, plaintext: BinaryData): (CipherState, BinaryData) = {
-    val (enc1, ciphertext1) = enc.encryptWithAd(BinaryData.empty, Protocol.writeUInt16(plaintext.length, ByteOrder.BIG_ENDIAN))
-    val (enc2, ciphertext2) = enc1.encryptWithAd(BinaryData.empty, plaintext)
-    (enc2, ciphertext1 ++ ciphertext2)
-  }
-
   def makeWriter(localStatic: KeyPair, remoteStatic: BinaryData) = Noise.HandshakeState.initializeWriter(
     Noise.handshakePatternXK, prologue,
     localStatic, KeyPair(BinaryData.empty, BinaryData.empty), remoteStatic, BinaryData.empty,
@@ -201,21 +303,6 @@ object TransportHandler {
     Noise.handshakePatternXK, prologue,
     localStatic, KeyPair(BinaryData.empty, BinaryData.empty), BinaryData.empty, BinaryData.empty,
     Noise.Secp256k1DHFunctions, Noise.Chacha20Poly1305CipherFunctions, Noise.SHA256HashFunctions)
-
-  // @formatter:off
-  sealed trait State
-  case object Handshake extends State
-  case object WaitingForListener extends State
-  case object WaitingForCyphertext extends State
-  // @formatter:on
-
-  case class Listener(listener: ActorRef)
-
-  case class HandshakeCompleted(transport: ActorRef, remoteNodeId: PublicKey)
-
-  sealed trait Data
-
-  case class HandshakeData(reader: Noise.HandshakeStateReader, buffer: ByteString = ByteString.empty) extends Data
 
   /**
     * extended cipher state which implements key rotation as per BOLT #8
@@ -230,7 +317,7 @@ object TransportHandler {
 
     override def encryptWithAd(ad: BinaryData, plaintext: BinaryData): (CipherState, BinaryData) = {
       cs match {
-        case UnitializedCipherState(_) => (this, plaintext)
+        case UninitializedCipherState(_) => (this, plaintext)
         case InitializedCipherState(k, n, _) if n == 999 => {
           val (_, ciphertext) = cs.encryptWithAd(ad, plaintext)
           val (ck1, k1) = SHA256HashFunctions.hkdf(ck, k)
@@ -245,7 +332,7 @@ object TransportHandler {
 
     override def decryptWithAd(ad: BinaryData, ciphertext: BinaryData): (CipherState, BinaryData) = {
       cs match {
-        case UnitializedCipherState(_) => (this, ciphertext)
+        case UninitializedCipherState(_) => (this, ciphertext)
         case InitializedCipherState(k, n, _) if n == 999 => {
           val (_, plaintext) = cs.decryptWithAd(ad, ciphertext)
           val (ck1, k1) = SHA256HashFunctions.hkdf(ck, k)
@@ -259,29 +346,73 @@ object TransportHandler {
     }
   }
 
-  case class WaitingForListenerData(enc: CipherState, dec: CipherState, buffer: ByteString) extends Data
-
-  case class WaitingForCyphertextData(enc: CipherState, dec: CipherState, ciphertextLength: Option[Int], buffer: ByteString, listener: ActorRef) extends Data {
-    def decrypt: (WaitingForCyphertextData, Seq[BinaryData]) = WaitingForCyphertextData.decrypt(this)
-  }
-
-  object WaitingForCyphertextData {
+  case class Decryptor(state: CipherState, ciphertextLength: Option[Int], buffer: ByteString) {
     @tailrec
-    def decrypt(state: WaitingForCyphertextData, acc: Seq[BinaryData] = Nil): (WaitingForCyphertextData, Seq[BinaryData]) = {
-      (state.ciphertextLength, state.buffer.length) match {
-        case (None, length) if length < 18 => (state, acc)
+    final def decrypt(acc: Seq[BinaryData] = Vector()): (Decryptor, Seq[BinaryData]) = {
+      (ciphertextLength, buffer.length) match {
+        case (None, length) if length < 18 => (this, acc)
         case (None, _) =>
-          val (ciphertext, remainder) = state.buffer.splitAt(18)
-          val (dec1, plaintext) = state.dec.decryptWithAd(BinaryData.empty, ciphertext)
+          val (ciphertext, remainder) = buffer.splitAt(18)
+          val (dec1, plaintext) = state.decryptWithAd(BinaryData.empty, ciphertext)
           val length = Protocol.uint16(plaintext, ByteOrder.BIG_ENDIAN)
-          decrypt(state.copy(dec = dec1, ciphertextLength = Some(length), buffer = remainder), acc)
-        case (Some(expectedLength), length) if length < expectedLength + 16 => (state, acc)
+          Decryptor(dec1, ciphertextLength = Some(length), buffer = remainder).decrypt(acc)
+        case (Some(expectedLength), length) if length < expectedLength + 16 => (Decryptor(state, ciphertextLength, buffer), acc)
         case (Some(expectedLength), _) =>
-          val (ciphertext, remainder) = state.buffer.splitAt(expectedLength + 16)
-          val (dec1, plaintext) = state.dec.decryptWithAd(BinaryData.empty, ciphertext)
-          decrypt(state.copy(dec = dec1, ciphertextLength = None, buffer = remainder), acc :+ plaintext)
+          val (ciphertext, remainder) = buffer.splitAt(expectedLength + 16)
+          val (dec1, plaintext) = state.decryptWithAd(BinaryData.empty, ciphertext)
+          Decryptor(dec1, ciphertextLength = None, buffer = remainder).decrypt(acc :+ plaintext)
       }
     }
   }
+
+  case class Encryptor(state: CipherState) {
+    /**
+      * see BOLT #8
+      * +-------------------------------
+      * |2-byte encrypted message length|
+      * +-------------------------------
+      * |  16-byte MAC of the encrypted |
+      * |        message length         |
+      * +-------------------------------
+      * |                               |
+      * |                               |
+      * |     encrypted lightning       |
+      * |            message            |
+      * |                               |
+      * +-------------------------------
+      * |     16-byte MAC of the        |
+      * |      lightning message        |
+      * +-------------------------------
+      *
+      * @param plaintext plaintext
+      * @return a (cipherstate, ciphertext) tuple where ciphertext is encrypted according to BOLT #8
+      */
+    def encrypt(plaintext: BinaryData): (Encryptor, BinaryData) = {
+      val (state1, ciphertext1) = state.encryptWithAd(BinaryData.empty, Protocol.writeUInt16(plaintext.length, ByteOrder.BIG_ENDIAN))
+      val (state2, ciphertext2) = state1.encryptWithAd(BinaryData.empty, plaintext)
+      (Encryptor(state2), ciphertext1 ++ ciphertext2)
+    }
+  }
+
+  // @formatter:off
+  sealed trait State
+  case object Handshake extends State
+  case object WaitingForListener extends State
+  case object Normal extends State
+
+  sealed trait Data
+  case class HandshakeData(reader: Noise.HandshakeStateReader, buffer: ByteString = ByteString.empty) extends Data
+  case class WaitingForListenerData(encryptor: Encryptor, decryptor: Decryptor) extends Data
+  case class NormalData[T](encryptor: Encryptor, decryptor: Decryptor, listener: ActorRef, sendBuffer: SendBuffer[T], unackedReceived: Map[T, Int], unackedSent: Option[T]) extends Data
+
+  case class SendBuffer[T](normalPriority: Queue[T], lowPriority: Queue[T])
+
+  case class Listener(listener: ActorRef)
+
+  case class HandshakeCompleted(connection: ActorRef, transport: ActorRef, remoteNodeId: PublicKey)
+
+  case class ReadAck(msg: Any)
+  case object WriteAck extends Tcp.Event
+  // @formatter:on
 
 }
